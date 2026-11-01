@@ -57,7 +57,8 @@ recommendation to stop or redirect. **The gate is not moved after results.**
 Per docs/SPEC.md §11. Reporting: per (family, Bn, K, distribution) tables of
 accept/valid/fail rates, bytes returned, prep/recompute/total compute,
 planning nodes/time; **full distributions** (min/median/p90/max) in the report;
-raw CSV per instance checked into `experiments/results/raw/`. Adversarial
+raw JSONL per instance is generated under the ignored
+`experiments/results/raw/` directory for local analysis. Adversarial
 families in their own section. Every accepted witness checker-validated;
 validation failures are bugs with regression tests, not data points to discard.
 
@@ -72,8 +73,9 @@ validation failures are bugs with regression tests, not data points to discard.
 
 ## v1.1 addendum (2026-11-01, audit remediation)
 
-The frozen v1.0 section above is preserved untouched; its results live under
-`experiments/results/v1.0/` (tag `phase1-model-v1.0`). The corrected
+The frozen v1.0 section above is preserved untouched; its historical results
+are summarized in `docs/PHASE1_AUDIT_REMEDIATION.md` (the raw v1.0 directory is
+not part of the current checkout). The corrected
 evaluation (SPEC v1.1) reuses the same grid, metrics, and budgets with these
 changes, declared before the v1.1 held-out run:
 
@@ -87,5 +89,6 @@ changes, declared before the v1.1 held-out run:
 4. Held-out seeds: **71-120** (fresh, never used for tuning); dev 1-20 re-run
    under v1.1 for iteration only.
 5. Raw artifacts: `experiments/results/raw/{dev_v1_1,heldout_v1_1}.jsonl`
-   (+ `.gz`), hashes in `experiments/results/MANIFEST_v1_1.sha256`.
+   (+ optional `.gz`) are local generated outputs and are intentionally not
+   part of the source checkout.
 Results and the go/no-go verdict: `docs/PHASE1_AUDIT_REMEDIATION.md` (PASS).

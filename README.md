@@ -92,4 +92,4 @@ FAILED result after the physical transfer has already occurred.
 - `docs/PHASE1_AUDIT_REMEDIATION.md` — audit findings and fixes
 - `docs/DECISIONS.md` — decision log (D1–D12)
 - `docs/ROADMAP.md` — phase gates and evidence
-- `experiments/results/` — raw data, manifests, feasibility + benchmark reports
+- `experiments/results/` — locally generated raw data and benchmark outputs

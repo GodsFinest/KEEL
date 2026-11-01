@@ -32,7 +32,7 @@ continuation-aware handovers are missed by every drop-only policy on 21.4% of
 oracle-feasible organic instances (≥10% in all 7 families), keel captures
 94.8% of those within the planning-cost envelope at median, and there are zero
 invalid accepts and zero false accepts corpus-wide. Negative findings are
-preserved in the report (§7).
+preserved in `docs/PHASE1_AUDIT_REMEDIATION.md` (§7).
 
 ## Done (evidence)
 - 2026-11-01 Phase 0: docs frozen (SPEC v1.0, EXPERIMENTS pre-declared,
@@ -53,14 +53,16 @@ preserved in the report (§7).
 - 2026-11-01 Dev phase (seeds 1–20): three planner defects found and fixed
   with regression tests (async WAIT vocabulary ×2, keel WAIT/RUN independence).
 - 2026-11-01 **Held-out run of record (seeds 21–70, frozen grid): 342,000
-  rows / 7,600 instances; gate criteria PASS; FEASIBILITY_REPORT.md written.**
+  rows / 7,600 instances; gate criteria PASS; results summarized in the audit
+  record.**
 
 ## Reproduction
-See FEASIBILITY_REPORT.md §8. Raw JSONL checked in under
-`experiments/results/raw/`.
+See the reproduction commands in `docs/PHASE1_AUDIT_REMEDIATION.md`. Raw JSONL
+outputs are generated locally under the ignored `experiments/results/raw/`
+directory and are not source-controlled.
 
 ## Blockers
-- None. Awaiting user review of the feasibility report.
+- None. Awaiting user review of the completed runtime audit.
 
 ## Full-runtime acceptance audit (2026-11-01)
 
@@ -99,18 +101,18 @@ Final runtime remediation evidence:
 
 | Contract item | Evidence |
 |---|---|
-| Clean checkout builds; all tests registered+executed | verified at e126b62 (46 cases) and after Phase 2-6 (74 cases); CMake lists all 10 TUs |
+| Clean checkout builds; all tests registered+executed | current CTest: 4 registered tests; `keel_tests` runs 100 cases / 18,286 assertions |
 | Exact oracle retained | src/oracle.cpp; used as benchmark reference instrument |
-| Bounded practical planner + hybrid evaluated | keel_plan/hybrid + Phase 8 ablation (experiments/results/phase8_dedup_ablation.txt) |
+| Bounded practical planner + hybrid evaluated | keel_plan/hybrid + retained Phase 8 decisions (`docs/DECISIONS.md`) |
 | Valid complete continuations; correct status classification | hybrid/keel statuses; UNKNOWN never converted to INFEASIBLE (test_rt_adversarial) |
 | Every accepted handover checker-validated; per-action invariants; malformed plans rejected | perform_handover VALIDATED gate; Phase 1 checker suites |
 | Stale plans cannot execute silently | control-thread exclusivity + per-action re-checking + version guard (test_rt_adversarial) |
 | Real bounded backing storage; ids/owners/generations; physical transfer; fragmentation accounted; no dual ownership | rt::BlockArena + verify() (test_rt_arena) |
-| Real numerical DAGs; workers+completion events; reservations; recompute; independent reference agreement | test_rt_executor, including hand-calculated broadcast/matmul values; 17,947 assertions |
+| Real numerical DAGs; workers+completion events; reservations; recompute; independent reference agreement | test_rt_executor, including hand-calculated broadcast/matmul values; 18,286 assertions |
 | Live handover: request mid-flight; valid reduction; B uses transferred blocks while A remains unfinished; A/B finish under their grants; invalid handovers rejected | test_rt_handover, test_rt_adversarial, keel_demo (14 live properties) |
-| Adversarial + sanitizers | full 84-case suite; ASan/UBSan and TSan full-suite runs; ASan/UBSan and TSan demos |
-| Strong baselines compared; raw data; honest joint failures and timing | experiments/results/rt_bench_v2.jsonl + rt_bench_v2_summary.txt + experiments/rt_aggregate.py; rows include joint-success and overlap/reuse metrics |
-| Phase 8 evidence-driven optimization | keel dedup ablation: -43% nodes, +62 accepts (kept); fragmentation documented as negative/future work |
+| Adversarial + sanitizers | 100-case suite; ASan/UBSan runtime tests + demo and full TSan suite + demo pass |
+| Strong baselines compared; raw data; honest joint failures and timing | `keel_bench` + `experiments/rt_aggregate.py`; generated rows include joint-success and overlap/reuse metrics |
+| Phase 8 evidence-driven optimization | retained in `docs/DECISIONS.md`; fragmentation remains documented as negative/future work |
 | README accurate; demo reproducible; limitations explicit | README.md (honest labels), docs/INVARIANTS.md (model-reality boundary) |
 
 Known honest limitations: fragmentation can still cause a normal execution

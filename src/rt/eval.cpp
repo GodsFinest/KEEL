@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <memory>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -133,7 +134,7 @@ const char* size_class(const RuntimeGraph& graph) {
 int64_t remaining_work(const RuntimeGraph& graph, const TaskRuntime& task) {
   int64_t total = 0;
   for (OpId v = 0; v < static_cast<OpId>(graph.ops().size()); ++v) {
-    if (task.op_state(v) == OpState::Done) continue;
+    if (task.op_state(v) != OpState::Pending) continue;
     if (__builtin_add_overflow(total, graph.ops()[v].cost, &total))
       throw std::overflow_error("evaluation remaining-work sum overflows");
   }
@@ -204,8 +205,9 @@ void install_reuse_observer(TaskRuntime& task, const RuntimeGraph& graph,
                             Clock::time_point request_start,
                             int64_t* first_useful_us,
                             int64_t* reused_bytes) {
+  const auto metrics_mu = std::make_shared<std::mutex>();
   task.set_worker_hook([&, transferred, request_start, first_useful_us,
-                        reused_bytes](OpId op, WorkerEvent event) {
+                        reused_bytes, metrics_mu](OpId op, WorkerEvent event) {
     if (event != WorkerEvent::BeforeExecute ||
         graph.ops()[op].kind == OpKind::Source)
       return;
@@ -219,6 +221,7 @@ void install_reuse_observer(TaskRuntime& task, const RuntimeGraph& graph,
             transferred.end())
           seen.insert(block);
     }
+    std::lock_guard<std::mutex> lk(*metrics_mu);
     if (*first_useful_us == 0) *first_useful_us = elapsed_us(request_start);
     for (size_t i = 0; i < seen.size(); ++i)
       *reused_bytes += arena.block_size();

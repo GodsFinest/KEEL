@@ -465,7 +465,8 @@ HandoverResult perform_handover(TaskRuntime& task, BlockArena& arena,
   int64_t wait_us = 0;
   WaitTimingGuard wait_guard{out, wait_us};
   bool committed = false;
-  for (size_t i = 0; i < runtime_witness.acts.size(); ++i) {
+  try {
+    for (size_t i = 0; i < runtime_witness.acts.size(); ++i) {
     const Act& a = runtime_witness.acts[i];
     if (expired("preparation")) return out;
     if (a.kind == ActKind::Commit) out.phase = HandoverPhase::Ready;
@@ -633,6 +634,29 @@ HandoverResult perform_handover(TaskRuntime& task, BlockArena& arena,
       log("aborted", out.note);
       return out;
     }
+    }
+  } catch (const std::exception& e) {
+    if (task.staging_active()) {
+      try {
+        task.end_handover(false);
+      } catch (...) {
+      }
+    }
+    out.phase = HandoverPhase::Failed;
+    out.note = std::string("handover action raised: ") + e.what();
+    log("aborted", out.note);
+    return out;
+  } catch (...) {
+    if (task.staging_active()) {
+      try {
+        task.end_handover(false);
+      } catch (...) {
+      }
+    }
+    out.phase = HandoverPhase::Failed;
+    out.note = "handover action raised an unknown exception";
+    log("aborted", out.note);
+    return out;
   }
   out.prep_compute = prep_compute;
   out.cont_compute = cont_compute;
@@ -669,7 +693,8 @@ bool continue_handover(TaskRuntime& task, HandoverResult& result,
   int64_t recompute_compute = result.recompute_compute;
   int64_t wait_us = result.wait_us;
   WaitTimingGuard wait_guard{result, wait_us};
-  for (const Act& a : result.continuation.acts) {
+  try {
+    for (const Act& a : result.continuation.acts) {
     std::string local;
     HandoverLogEntry entry;
     if (!apply_act(task, a, /*committed=*/true, result.new_grant_bytes,
@@ -690,6 +715,17 @@ bool continue_handover(TaskRuntime& task, HandoverResult& result,
       return false;
     }
     if (!entry.event.empty()) result.log.push_back(entry);
+    }
+  } catch (const std::exception& e) {
+    if (why) *why = std::string("continuation raised: ") + e.what();
+    result.phase = HandoverPhase::Failed;
+    result.note = why ? *why : "continuation raised an exception";
+    return false;
+  } catch (...) {
+    if (why) *why = "continuation raised an unknown exception";
+    result.phase = HandoverPhase::Failed;
+    result.note = why ? *why : "continuation raised an exception";
+    return false;
   }
   std::string terminal_error;
   if (!task.completion_ready(&terminal_error)) {

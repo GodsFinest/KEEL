@@ -156,6 +156,19 @@ std::string validate_state(const Graph& g, const State& s, const Request& r) {
   if (std::string e = validate_request(r); !e.empty()) return e;
   const int nops = (int)g.ops.size();
   const int nts = (int)g.tensors.size();
+  const OpMask valid_ops =
+      nops == 64 ? ~OpMask(0)
+                 : (nops == 0 ? OpMask(0) : (OpMask(1) << nops) - 1);
+  const TensorMask valid_tensors =
+      nts == 64 ? ~TensorMask(0)
+                : (nts == 0 ? TensorMask(0) : (TensorMask(1) << nts) - 1);
+  if ((s.done & ~valid_ops) != 0 || (s.inflight & ~valid_ops) != 0)
+    return "state contains an out-of-range operation bit";
+  if ((s.resident & ~valid_tensors) != 0)
+    return "state contains an out-of-range tensor bit";
+  if (s.prep_used < 0) return "preparation usage is negative";
+  if (s.committed && s.released_bytes < r.Bo - r.Bn)
+    return "committed state does not satisfy the release target";
   for (int t = 0; t < nts; ++t) {
     if (!(s.resident & (TensorMask(1) << t))) continue;
     OpId p = g.tensors[t].producer;
@@ -174,9 +187,13 @@ std::string validate_state(const Graph& g, const State& s, const Request& r) {
   if (!s.committed && s.prep_used > r.K) return "prep budget already exceeded";
   if (s.released_bytes < 0 || s.released_bytes > r.Bo)
     return "released bytes out of range";
-  Memory m = memory_of(g, s, r);
-  if (!m.ok) return "accounting overflow";
-  if (m.usage > m.ceiling) return "state violates the memory invariant";
+  try {
+    Memory m = memory_of(g, s, r);
+    if (!m.ok) return "accounting overflow";
+    if (m.usage > m.ceiling) return "state violates the memory invariant";
+  } catch (const std::overflow_error& e) {
+    return e.what();
+  }
   return "";
 }
 

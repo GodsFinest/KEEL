@@ -84,6 +84,16 @@ bool reads_protected(const Graph& g, const CState& s, TensorId t) {
 CheckResult check_witness(const Graph& g, const State& initial,
                           const Request& r, const Witness& w) {
   CheckResult res;
+  auto bad_req = [](const char* msg) {
+    return CheckResult{.ok = false,
+                       .reached_goal = false,
+                       .error_index = -1,
+                       .error = msg};
+  };
+  if (r.Bo <= 0) return bad_req("Bo must be positive");
+  if (r.Bn < 0 || r.Bn >= r.Bo) return bad_req("Bn out of range vs Bo");
+  if (r.K < 0) return bad_req("K must be non-negative");
+
   CState s;
   s.op_done.assign(g.ops.size(), 0);
   s.op_inflight.assign(g.ops.size(), 0);
@@ -98,6 +108,28 @@ CheckResult check_witness(const Graph& g, const State& initial,
   s.prep_used = initial.prep_used;
   s.committed = initial.committed;
   s.committed_seen = initial.committed;
+
+  const int nops = static_cast<int>(g.ops.size());
+  const int nts = static_cast<int>(g.tensors.size());
+  const OpMask valid_ops =
+      nops == 64 ? ~OpMask(0)
+                 : (nops == 0 ? OpMask(0) : (OpMask(1) << nops) - 1);
+  const TensorMask valid_tensors =
+      nts == 64 ? ~TensorMask(0)
+                : (nts == 0 ? TensorMask(0) : (TensorMask(1) << nts) - 1);
+  if ((initial.done & ~valid_ops) != 0 ||
+      (initial.inflight & ~valid_ops) != 0)
+    return bad_req("initial state contains an out-of-range operation bit");
+  if ((initial.resident & ~valid_tensors) != 0)
+    return bad_req("initial state contains an out-of-range tensor bit");
+  if (initial.released_bytes < 0 || initial.released_bytes > r.Bo)
+    return bad_req("initial released bytes out of range");
+  if (initial.prep_used < 0)
+    return bad_req("initial preparation usage is negative");
+  if (!initial.committed && initial.prep_used > r.K)
+    return bad_req("initial preparation usage exceeds K");
+  if (initial.committed && initial.released_bytes < r.Bo - r.Bn)
+    return bad_req("initial committed state does not satisfy release target");
 
   // Validate the initial state itself (the checker is also the tool that
   // proves frontier states are legal): invariant + structural sanity.
@@ -142,20 +174,6 @@ CheckResult check_witness(const Graph& g, const State& initial,
   }
 
   res.ok = true;  // provisionally; any failure sets it false
-
-  // Validate the request itself, independently (audit finding 3).
-  auto bad_req = [](const char* msg) {
-    return CheckResult{.ok = false,
-                       .reached_goal = false,
-                       .error_index = -1,
-                       .error = msg};
-  };
-  if (r.Bo <= 0) return bad_req("Bo must be positive");
-  if (r.Bn < 0 || r.Bn >= r.Bo) return bad_req("Bn out of range vs Bo");
-  if (r.K < 0) return bad_req("K must be non-negative");
-  if (s.released_bytes < 0 || s.released_bytes > r.Bo)
-    return bad_req("initial released bytes out of range");
-  if (s.prep_used < 0) return bad_req("initial preparation usage is negative");
 
   // Full invariant after EVERY action (SPEC v1.1 §4; audit finding 2):
   // checked via the lambda below at the end of each case.
@@ -274,6 +292,8 @@ CheckResult check_witness(const Graph& g, const State& initial,
           check_invariant(i);
           break;
         }
+        default:
+          fail(res, i, "unknown action kind");
       }
     }
   } catch (CheckResult& failure) {

@@ -247,6 +247,24 @@ TEST_CASE("audit f3: malformed frontier states are detected") {
     s.prep_used = r.K + 1;
     CHECK(!validate_state(og.g, s, r).empty());
   }
+  SUBCASE("negative preparation usage") {
+    State s;
+    s.prep_used = -1;
+    CHECK(!validate_state(og.g, s, r).empty());
+  }
+  SUBCASE("out-of-range state masks") {
+    State s;
+    s.done = OpMask(1) << og.g.ops.size();
+    CHECK(!validate_state(og.g, s, r).empty());
+    s = State{};
+    s.resident = TensorMask(1) << og.g.tensors.size();
+    CHECK(!validate_state(og.g, s, r).empty());
+  }
+  SUBCASE("committed state must already meet the release target") {
+    State s;
+    s.committed = true;
+    CHECK(!validate_state(og.g, s, r).empty());
+  }
   SUBCASE("invariant-violating state") {
     State s;
     s.resident = (TensorMask(1) << og.a_t) | (TensorMask(1) << og.b_t) |
@@ -266,4 +284,14 @@ TEST_CASE("audit f3: checker rejects malformed requests outright") {
   Request bad{.Bo = 5, .Bn = 9, .K = 1};  // Bn >= Bo
   CheckResult res = check_witness(og.g, s0, bad, Witness{});
   CHECK_FALSE(res.ok);
+}
+
+TEST_CASE("audit f3: checker rejects unknown action kinds") {
+  auto og = OvercommitGraph::make();
+  State s0 = og.frontier(audit_request());
+  const ActKind unknown = static_cast<ActKind>(99);
+  CheckResult res = check_witness(og.g, s0, audit_request(),
+                                  Witness{{Act{unknown, -1}}});
+  CHECK_FALSE(res.ok);
+  CHECK(res.error_index == 0);
 }

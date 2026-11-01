@@ -168,6 +168,7 @@ class TaskRuntime {
   void execute_op(OpId v, const std::vector<void*>& ins, void* out,
                   void* scratch);
   void publish(OpId v);  // control-thread completion bookkeeping
+  void discard_inflight(OpId v);  // reclaim reservations after worker failure
   bool inputs_ready(OpId v) const;
   int64_t inflight_reserved_bytes() const;
   bool required_outputs_ready(std::string* why) const;

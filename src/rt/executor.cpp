@@ -150,6 +150,21 @@ TaskRuntime::~TaskRuntime() {
   }
   cv_.notify_all();
   for (auto& t : threads_) t.join();
+  try {
+    drain_completions();
+    if (staging_active_) end_handover(false);
+    for (TensorSlot& slot : slots_) {
+      if (!slot.live) continue;
+      arena_.free(slot.alloc);
+      slot = TensorSlot{};
+    }
+    arena_.release_task(task_);
+  } catch (...) {
+    // Destruction cannot report an exception. The normal path above is
+    // invariant-preserving; retain termination semantics for an unexpected
+    // allocator failure rather than throwing from a destructor.
+    std::terminate();
+  }
 }
 
 void TaskRuntime::worker_loop(int) {
@@ -318,9 +333,34 @@ void TaskRuntime::publish(OpId v) {
   if (live > stats_.peak_live_bytes) stats_.peak_live_bytes = live;
 }
 
+void TaskRuntime::discard_inflight(OpId v) {
+  auto it = std::find_if(
+      inflight_records_.begin(), inflight_records_.end(),
+      [v](const InFlightRecord& record) { return record.op == v; });
+  if (it == inflight_records_.end()) return;
+  const InFlightRecord record = *it;
+  for (size_t i = 0; i < record.outputs.size(); ++i) {
+    const TensorId t = g_.ops()[v].outputs[i];
+    if (slots_[t].alloc == record.outputs[i]) {
+      slots_[t].alloc = AllocHandle{};
+      slots_[t].live = false;
+      slots_[t].valid = false;
+    }
+    arena_.free(record.outputs[i]);
+  }
+  if (record.scratch.valid()) arena_.free(record.scratch);
+  inflight_records_.erase(it);
+  inflight_list_.erase(
+      std::remove(inflight_list_.begin(), inflight_list_.end(), v),
+      inflight_list_.end());
+  op_state_[v] = OpState::Pending;
+  ++state_version_;
+}
+
 void TaskRuntime::drain_completions() {
   for (;;) {
     OpId v;
+    bool failed = false;
     {
       std::lock_guard<std::mutex> lk(mu_);
       if (done_.empty()) return;
@@ -329,8 +369,12 @@ void TaskRuntime::drain_completions() {
       v = completion.op;
       if (completion.error) {
         worker_error_ = completion.error;
-        continue;
+        failed = true;
       }
+    }
+    if (failed) {
+      discard_inflight(v);
+      continue;
     }
     publish(v);
   }
@@ -343,6 +387,8 @@ void TaskRuntime::wait_op(OpId v) {
     drain_completions();
     if (worker_error_) std::rethrow_exception(worker_error_);
     if (op_state_[v] == OpState::Done) return;
+    if (op_state_[v] == OpState::Pending)
+      throw std::logic_error("wait_op: operation is not in flight");
     std::unique_lock<std::mutex> lk(mu_);
     cv_.wait_for(lk, std::chrono::milliseconds(1));
   }
@@ -538,12 +584,6 @@ bool TaskRuntime::required_outputs_ready(std::string* why) const {
   if (!inflight_list_.empty()) {
     if (why) *why = "required-output check observed in-flight work";
     return false;
-  }
-  for (OpState state : op_state_) {
-    if (state != OpState::Done) {
-      if (why) *why = "required-output check observed an unfinished operation";
-      return false;
-    }
   }
   for (TensorId t = 0; t < (TensorId)g_.tensors().size(); ++t) {
     if (g_.tensors()[t].required && !tensor_valid(t)) {
@@ -765,6 +805,13 @@ bool TaskRuntime::preflight_continuation(const std::vector<Act>& acts,
     }
     if (shadow.bytes_owned(task_) > new_grant_bytes)
       return refuse("continuation ownership exceeds the new grant");
+    if (!inflight.empty())
+      return refuse("continuation leaves work in flight");
+    for (TensorId t = 0; t < (TensorId)g_.tensors().size(); ++t) {
+      if (g_.tensors()[t].required &&
+          (!slots[t].live || !slots[t].valid))
+        return refuse("continuation leaves a required output unavailable");
+    }
     return true;
   } catch (const std::exception& e) {
     return refuse(std::string("physical preflight failed: ") + e.what());
@@ -848,8 +895,9 @@ void TaskRuntime::load_source(OpId source_op, uint64_t seed) {
 
 std::vector<std::vector<double>> reference_execute_f64(
     const RuntimeGraph& g, const std::vector<uint64_t>& source_seeds) {
-  const_cast<RuntimeGraph&>(g).finish();  // graphs are finished once, idempotent
-  std::vector<std::vector<double>> vals(g.tensors().size());
+  RuntimeGraph graph = g;
+  graph.finish();
+  std::vector<std::vector<double>> vals(graph.tensors().size());
   auto ref_numel = [](const std::vector<int64_t>& shape) {
     int64_t n = 1;
     for (int64_t d : shape) {
@@ -877,10 +925,10 @@ std::vector<std::vector<double>> reference_execute_f64(
     }
     return result;
   };
-  for (OpId v : g.topo()) {
-    const OpSpec& op = g.ops()[v];
+  for (OpId v : graph.topo()) {
+    const OpSpec& op = graph.ops()[v];
     for (TensorId t : op.outputs)
-      vals[t].assign((size_t)ref_numel(g.tensors()[t].shape), 0.0);
+      vals[t].assign((size_t)ref_numel(graph.tensors()[t].shape), 0.0);
     if (op.kind == OpKind::Source) {
       TensorId t = op.outputs[0];
       uint64_t seed = (v < (OpId)source_seeds.size()) ? source_seeds[v] : 42;
@@ -889,7 +937,7 @@ std::vector<std::vector<double>> reference_execute_f64(
       continue;
     }
     const TensorId out_id = op.outputs[0];
-    const std::vector<int64_t>& out_shape = g.tensors()[out_id].shape;
+    const std::vector<int64_t>& out_shape = graph.tensors()[out_id].shape;
     std::vector<double>& out = vals[out_id];
     const std::vector<double>& a = vals[op.inputs[0]];
     const std::vector<double>& b = op.inputs.size() > 1 ? vals[op.inputs[1]] : a;
@@ -898,8 +946,8 @@ std::vector<std::vector<double>> reference_execute_f64(
       case OpKind::Mul:
       case OpKind::ResidualAdd: {
         const bool binary = op.inputs.size() == 2;
-        const auto& ashape = g.tensors()[op.inputs[0]].shape;
-        const auto& bshape = binary ? g.tensors()[op.inputs[1]].shape : ashape;
+        const auto& ashape = graph.tensors()[op.inputs[0]].shape;
+        const auto& bshape = binary ? graph.tensors()[op.inputs[1]].shape : ashape;
         for (int64_t i = 0; i < ref_numel(out_shape); ++i) {
           const int64_t ia = binary ? ref_broadcast_index(i, out_shape, ashape) : i;
           const int64_t ib = binary ? ref_broadcast_index(i, out_shape, bshape) : i;
@@ -912,7 +960,7 @@ std::vector<std::vector<double>> reference_execute_f64(
       case OpKind::ScratchGemm: {
         const int64_t m = out_shape[0];
         const int64_t n = out_shape[1];
-        const int64_t k = g.tensors()[op.inputs[0]].shape[1];
+        const int64_t k = graph.tensors()[op.inputs[0]].shape[1];
         // The reference uses the direct textbook loop. In particular it does
         // not use the production scratch packing path.
         for (int64_t i = 0; i < m; ++i)
@@ -926,7 +974,7 @@ std::vector<std::vector<double>> reference_execute_f64(
       }
       case OpKind::ReduceSum: {
         const int64_t m = out_shape[0];
-        const int64_t k = g.tensors()[op.inputs[0]].shape[1];
+        const int64_t k = graph.tensors()[op.inputs[0]].shape[1];
         for (int64_t i = 0; i < m; ++i) {
           volatile double sum = 0.0;
           for (int64_t j = 0; j < k; ++j) sum += a[(size_t)(i * k + j)];

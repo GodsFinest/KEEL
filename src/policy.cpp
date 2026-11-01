@@ -7,8 +7,7 @@
 #include <numeric>
 #include <queue>
 #include <unordered_map>
-#include <queue>
-#include <unordered_map>
+#include <stdexcept>
 
 namespace keel {
 
@@ -128,10 +127,6 @@ ExecResult greedy_execute(const Graph& g, State s, const Request& r,
       ++out.steps;
     }
   }
-
-  // position of each op in topo order
-  std::vector<int> pos(g.ops.size(), -1);
-  for (size_t i = 0; i < g.topo.size(); ++i) pos[g.topo[i]] = (int)i;
 
   for (size_t i = 0; i < g.topo.size(); ++i) {
     OpId v = g.topo[i];
@@ -520,13 +515,14 @@ PolicyOutcome keel_plan(const Graph& g, const State& s0, const Request& r,
         State nw = apply_wait(g, c.s, v);
         std::vector<Act> wa = c.acts;
         wa.push_back({ActKind::Wait, v});
-        frontier.push(Cand{c.score, seq++, nw, std::move(wa), c.prep_cost});
+        push_candidate(Cand{c.score, seq++, nw, std::move(wa), c.prep_cost});
       }
       if (!can_run(g, c.s, r, v).ok) continue;
       State ns = apply_run(g, c.s, r, v);
       std::vector<Act> na = c.acts;
       na.push_back({ActKind::Run, v});
-      int64_t pc = c.prep_cost + g.ops[v].cost;
+      int64_t pc = 0;
+      if (__builtin_add_overflow(c.prep_cost, g.ops[v].cost, &pc)) continue;
       push_candidate(
           Cand{c.s.released_bytes - pc, seq++, ns, std::move(na), pc});
     }
@@ -558,7 +554,8 @@ int64_t releasable_bytes(const Graph& g, const State& s) {
     TensorMask bit = TensorMask(1) << t;
     if ((s.resident & bit) && !g.tensors[t].required && !g.tensors[t].pinned &&
         can_drop(g, s, t).ok)
-      sum += g.tensors[t].size;
+      if (__builtin_add_overflow(sum, g.tensors[t].size, &sum))
+        throw std::overflow_error("releasable byte sum overflows");
   }
   return sum;
 }
@@ -586,12 +583,21 @@ PolicyOutcome prep_greedy(const Graph& g, const State& s0, const Request& r,
       int64_t best_ratio_num = 0, best_ratio_den = 1;
       for (OpId v = 0; v < nops; ++v) {
         if (!can_run(g, s, r, v).ok) continue;
-        if (!s.committed && prep_used + g.ops[v].cost > r.K) continue;
+        int64_t next_prep = 0;
+        if (!s.committed &&
+            (__builtin_add_overflow(prep_used, g.ops[v].cost, &next_prep) ||
+             next_prep > r.K))
+          continue;
         State ns = apply_run(g, s, r, v);
         int64_t delta = releasable_bytes(g, ns) - before;
         if (delta <= 0) continue;
-        if (best == -1 ||
-            delta * best_ratio_den > best_ratio_num * g.ops[v].cost) {
+        const long double ratio =
+            static_cast<long double>(delta) /
+            static_cast<long double>(g.ops[v].cost);
+        const long double best_ratio =
+            static_cast<long double>(best_ratio_num) /
+            static_cast<long double>(best_ratio_den);
+        if (best == -1 || ratio > best_ratio) {
           best = v;
           best_ratio_num = delta;
           best_ratio_den = g.ops[v].cost;
@@ -599,7 +605,9 @@ PolicyOutcome prep_greedy(const Graph& g, const State& s0, const Request& r,
       }
       if (best == -1) break;
       prep.push_back({ActKind::Run, best});
-      if (!s.committed) prep_used += g.ops[best].cost;
+      if (!s.committed &&
+          __builtin_add_overflow(prep_used, g.ops[best].cost, &prep_used))
+        break;
       s = apply_run(g, s, r, best);
       work.executor_steps += 1;
     }

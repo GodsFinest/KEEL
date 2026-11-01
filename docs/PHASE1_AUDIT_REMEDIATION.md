@@ -203,9 +203,9 @@ achieving what no ladder can).
   (AppleClang 17). The dominance differential under sanitizers was attempted
   and descoped for runtime (ASan slows the exhaustive double-search by orders
   of magnitude); it is not part of the frozen verification set — the
-  differential itself passes unsanitized corpus-wide. TSan remains
-  unattempted (single-threaded Phase 1; deferred to Phase 4 where threads
-  exist).
+  differential itself passes unsanitized corpus-wide. TSan was unattempted for
+  the single-threaded Phase 1 audit; runtime-threading sanitizer status belongs
+  to the later full-runtime verification rather than this historical record.
 
 ## 4. Reproduction
 

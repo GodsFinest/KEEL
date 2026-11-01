@@ -82,6 +82,20 @@ int64_t BlockArena::claim(TaskId t, int64_t nblocks) {
   return static_cast<int64_t>(selected.size());
 }
 
+void BlockArena::release_task(TaskId t) {
+  std::lock_guard<std::recursive_mutex> lk(mu_);
+  if (t < 0) throw std::invalid_argument("negative task id");
+  if (static_cast<size_t>(t) >= free_.size()) return;
+  for (const AllocRecord& record : records_)
+    if (record.live && record.owner == t)
+      throw std::logic_error("cannot release task with live allocations");
+  if (!held_[t].empty())
+    throw std::logic_error("cannot release task with held extents");
+  for (TaskId& owner : owner_)
+    if (owner == t) owner = -1;
+  free_[t].clear();
+}
+
 int64_t BlockArena::blocks_owned(TaskId t) const {
   std::lock_guard<std::recursive_mutex> lk(mu_);
   int64_t n = 0;
@@ -293,6 +307,7 @@ std::vector<int32_t> BlockArena::transfer_free(TaskId from, TaskId to,
   if (min_blocks <= 0) throw std::invalid_argument("transfer must move >0 blocks");
   ensure_task(from);
   ensure_task(to);
+  if (from == to) throw std::invalid_argument("transfer source and destination match");
   auto& src = free_[from];
   // Atomicity: verify availability BEFORE moving anything (audit-style
   // physical atomicity — a failed transfer must leave the arena untouched).

@@ -134,6 +134,20 @@ TEST_CASE("arena: failed transfer leaves the arena untouched") {
   CHECK(a.verify(&err));
 }
 
+TEST_CASE("arena: same-owner free transfer is rejected atomically") {
+  BlockArena a(2048, 256);
+  a.claim(0, 8);
+  AllocHandle first = a.alloc(0, 256);
+  AllocHandle second = a.alloc(0, 256);
+  a.free(first);
+  a.free(second);
+  CHECK_THROWS(a.transfer_free(0, 0, 1));
+  CHECK(a.blocks_owned(0) == 8);
+  std::string err;
+  CHECK(a.verify(&err));
+  CHECK(a.alloc(0, 2048).valid());
+}
+
 TEST_CASE("arena: coalescing and the debug verifier") {
   BlockArena a(2048, 256);
   a.claim(0, 8);

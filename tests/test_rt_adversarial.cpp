@@ -7,7 +7,10 @@
 #include <keel/rt/executor.hpp>
 #include <keel/rt/handover.hpp>
 
+#include <condition_variable>
 #include <cstring>
+#include <mutex>
+#include <stdexcept>
 
 using namespace keel;
 using namespace keel::rt;
@@ -83,6 +86,43 @@ TEST_CASE("adversary: handover request while an operation is in flight") {
   CHECK(task_a.invariants_hold(&err));
   CHECK(arena.verify(&err));
   (void)task_b;
+}
+
+TEST_CASE("adversary: worker failure during handover rolls back staging") {
+  RuntimeGraph g = make_dag();
+  BlockArena arena(1 << 20, 256);
+  TaskRuntime task(g, arena, 0, 256 * 1024, 1);
+  task.load_source(0, 7);
+  task.load_source(1, 8);
+  std::mutex mu;
+  std::condition_variable cv;
+  bool entered = false;
+  task.set_worker_hook([&](OpId op, WorkerEvent event) {
+    if (op != 2 || event != WorkerEvent::BeforeExecute) return;
+    {
+      std::lock_guard<std::mutex> lk(mu);
+      entered = true;
+    }
+    cv.notify_one();
+    throw std::runtime_error("handover worker failure");
+  });
+  REQUIRE(task.dispatch_ready() == 1);
+  {
+    std::unique_lock<std::mutex> lk(mu);
+    REQUIRE(cv.wait_for(lk, std::chrono::seconds(5), [&] { return entered; }));
+  }
+  HandoverResult result = perform_handover(
+      task, arena, 1, 256 * 1024 - 8 * 1024, 100, PlanPolicy::Hybrid);
+  CHECK_FALSE(result.accepted);
+  const bool failed_phase = result.phase == HandoverPhase::Failed;
+  const bool rejected_phase = result.phase == HandoverPhase::Rejected;
+  const bool unknown_phase = result.phase == HandoverPhase::Unknown;
+  const bool phase_ok = failed_phase || rejected_phase || unknown_phase;
+  CHECK(phase_ok);
+  CHECK_FALSE(task.staging_active());
+  std::string err;
+  CHECK(task.invariants_hold(&err));
+  CHECK(arena.verify(&err));
 }
 
 TEST_CASE("adversary: post-commit grant violation is reported, not hidden") {

@@ -59,11 +59,14 @@ std::vector<int64_t> broadcast_shape(const std::vector<int64_t>& a,
                                      const std::vector<int64_t>& b) {
   const size_t rank = std::max(a.size(), b.size());
   std::vector<int64_t> out(rank, 1);
+  const auto aligned_dim = [rank](const std::vector<int64_t>& shape,
+                                  size_t axis) {
+    const size_t offset = rank - shape.size();
+    return axis < offset ? int64_t{1} : shape[axis - offset];
+  };
   for (size_t i = 0; i < rank; ++i) {
-    const size_t ai = i + a.size() >= rank ? i + a.size() - rank : 0;
-    const size_t bi = i + b.size() >= rank ? i + b.size() - rank : 0;
-    const int64_t ad = (a.size() < rank - i) ? 1 : a[ai];
-    const int64_t bd = (b.size() < rank - i) ? 1 : b[bi];
+    const int64_t ad = aligned_dim(a, i);
+    const int64_t bd = aligned_dim(b, i);
     if (ad != bd && ad != 1 && bd != 1)
       throw std::invalid_argument("incompatible broadcast shapes");
     out[i] = std::max(ad, bd);
@@ -266,10 +269,6 @@ RuntimeGraph::AbstractProjection RuntimeGraph::to_abstract_projection() const {
   // an earlier op.
   const int n = (int)ops_.size();
   std::vector<TensorId> map(tensors_.size(), -1);
-  auto abs_tensor = [&](TensorId t) -> TensorId {
-    if (map[t] != -1) return map[t];
-    throw std::invalid_argument("internal: tensor created out of order");
-  };
   for (int v = 0; v < n; ++v) {
     // Inputs must already exist (creation order guarantees it: a tensor is
     // created before its consumer op because consumers come later).
@@ -285,7 +284,6 @@ RuntimeGraph::AbstractProjection RuntimeGraph::to_abstract_projection() const {
       map[t] = b.add_tensor(tensor_bytes_[t], /*producer=*/-1,
                             ts.required, ts.pinned);
       abs_outs.push_back(map[t]);
-      (void)abs_tensor;
     }
     std::vector<TensorId> abs_ins;
     for (TensorId t : ops_[v].inputs) abs_ins.push_back(map[t]);

@@ -12,6 +12,7 @@
 #include <cstring>
 #include <initializer_list>
 #include <mutex>
+#include <stdexcept>
 
 using namespace keel;
 using namespace keel::rt;
@@ -86,6 +87,66 @@ TEST_CASE("executor: physical grant enforcement — oversubscription stalls") {
   std::string err;
   CHECK(rt.invariants_hold(&err));
   CHECK(rt.controlled_bytes() <= rt.grant_bytes());
+}
+
+TEST_CASE("executor: waiting on a pending operation fails immediately") {
+  RuntimeGraph g;
+  g.add_tensor({DType::F64, {1}, true});
+  g.add_op({OpKind::Source, {}, {0}, 0, 1, false});
+  g.finish();
+  BlockArena arena(16 * 1024, 256);
+  TaskRuntime rt(g, arena, 0, 16 * 1024, 1);
+  CHECK_THROWS(rt.wait_op(0));
+}
+
+TEST_CASE("executor: worker failure reclaims in-flight reservations") {
+  RuntimeGraph g;
+  g.add_tensor({DType::F64, {1}});
+  g.add_tensor({DType::F64, {1}, true});
+  g.add_op({OpKind::Source, {}, {0}, 0, 1, false});
+  g.add_op({OpKind::Add, {0}, {1}, 0, 1, true});
+  g.finish();
+  BlockArena arena(16 * 1024, 256);
+  TaskRuntime rt(g, arena, 0, 16 * 1024, 1);
+  rt.load_source(0, 7);
+  rt.set_worker_hook([](OpId op, WorkerEvent event) {
+    if (op == 1 && event == WorkerEvent::BeforeExecute)
+      throw std::runtime_error("test worker failure");
+  });
+  REQUIRE(rt.dispatch_ready() == 1);
+  CHECK_FALSE(rt.run_to_completion());
+  CHECK(rt.op_state(1) == OpState::Pending);
+  CHECK_FALSE(rt.tensor_resident(1));
+  std::string err;
+  CHECK(rt.invariants_hold(&err));
+}
+
+TEST_CASE("executor: task destruction releases its arena ownership") {
+  RuntimeGraph g;
+  g.add_tensor({DType::F64, {1}, true});
+  g.add_op({OpKind::Source, {}, {0}, 0, 1, false});
+  g.finish();
+  BlockArena arena(16 * 1024, 256);
+  {
+    TaskRuntime rt(g, arena, 0, 16 * 1024, 1);
+    rt.load_source(0, 7);
+    REQUIRE(rt.tensor_resident(0));
+  }
+  CHECK(arena.blocks_owned(0) == 0);
+  CHECK(arena.claim(1, 64) == 64);
+  std::string err;
+  CHECK(arena.verify(&err));
+}
+
+TEST_CASE("executor: reference execution does not mutate a const graph") {
+  RuntimeGraph unfinished;
+  unfinished.add_tensor({DType::F64, {1}, true});
+  unfinished.add_op({OpKind::Source, {}, {0}, 0, 1, false});
+  const RuntimeGraph graph = unfinished;
+  const auto values = reference_execute_f64(graph, {7});
+  CHECK(graph.topo().empty());
+  REQUIRE(values.size() == 1);
+  CHECK(values[0].size() == 1);
 }
 
 TEST_CASE("executor: drop + recompute reproduces identical bits") {

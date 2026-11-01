@@ -117,7 +117,7 @@ def main():
         **config,
         "grant_profiles_config": GRANT_PROFILES,
         "block_size": 256,
-        "protocol": "docs/EVALUATION_PROTOCOL.md",
+        "protocol": "docs/EXPERIMENTS.md",
         "bounds": {
             "abstract_graph_max_ops": 64,
             "evaluation_graph_max_ops": 11,

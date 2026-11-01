@@ -69,6 +69,10 @@ class BlockArena {
   // Assign the lowest-indexed unowned blocks to `t` (its initial region).
   // Returns blocks assigned. Blocks already owned are never reassigned.
   int64_t claim(TaskId t, int64_t nblocks);
+  // Release a task's entire ownership after all live allocations and held
+  // extents have been retired. This makes arena lifetime independent of the
+  // TaskRuntime object that temporarily controlled the grant.
+  void release_task(TaskId t);
   int64_t blocks_owned(TaskId t) const;
   int64_t bytes_owned(TaskId t) const;
   // Allocator-shape diagnostics used by the evaluation harness. Held blocks

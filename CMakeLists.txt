@@ -65,6 +65,8 @@ add_executable(keel_eval src/rt/eval.cpp)
 target_link_libraries(keel_eval PRIVATE keel_core)
 
 add_test(NAME keel_tests COMMAND keel_tests)
+add_test(NAME dominance_differential
+  COMMAND $<TARGET_FILE:keel_domcheck> 1)
 add_test(NAME evaluation_integrity
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/experiments/test_evaluation_integrity.py)
 add_test(NAME evaluation_controls
